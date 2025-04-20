@@ -1,78 +1,41 @@
-import os
-import streamlit as st
+import pinecone
+from langchain_community.vectorstores import Pinecone
+from langchain.embeddings import OpenAIEmbeddings
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.document_loaders import TextLoader
-from langchain_openai import OpenAIEmbeddings
-from pinecone import Pinecone
+from langchain.document_loaders import TextLoader
+from langchain.vectorstores import Pinecone as LangchainPinecone
 
-# UI Setup
-st.title("🔍 Chat with Your Docs using Pinecone + LangChain")
+# Initialize Pinecone
+pinecone.init(api_key="your_api_key", environment="us-west1-gcp")
 
-# Input fields
-openai_api_key = st.text_input("🔑 OpenAI API Key", type="password")
-pinecone_api_key = st.text_input("🌲 Pinecone API Key", type="password")
-index_name = st.text_input("📦 Pinecone Index Name (e.g. openaitext-embedding-3-large)", value="openaitext-embedding-3-large")
-uploaded_file = st.file_uploader("📁 Upload a text file")
+# Load and process the uploaded file
+file_path = "uploaded.txt"
+try:
+    with open(file_path, encoding='ISO-8859-1') as f:  # Handle potential encoding issues
+        text = f.read()
+except Exception as e:
+    print(f"Error loading file: {e}")
 
-if openai_api_key and pinecone_api_key and uploaded_file:
-    st.success("✅ All credentials and file uploaded. Processing...")
+# Split the text into smaller chunks
+text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+split_docs = text_splitter.split_documents([text])
 
-    # Ensure LangChain sees the Pinecone API key
-    os.environ["PINECONE_API_KEY"] = pinecone_api_key
+# Create embeddings using OpenAI's embeddings model (or your own model)
+embed_model = OpenAIEmbeddings()
 
-    # Save uploaded file temporarily
-    file_path = "uploaded.txt"
-    with open(file_path, "wb") as f:
-        f.write(uploaded_file.getvalue())
+# Create or connect to the Pinecone index
+index_name = "your_index_name"
+index = pinecone.Index(index_name)
 
-    # Read file with error handling for encoding
-    try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            text = f.read()
-    except UnicodeDecodeError:
-        st.warning("UTF-8 decoding failed, trying ISO-8859-1...")
-        with open(file_path, "r", encoding="ISO-8859-1") as f:
-            text = f.read()
+# Initialize the Langchain Pinecone vectorstore with the correct Pinecone index
+vectorstore = LangchainPinecone.from_documents(
+    documents=split_docs,
+    embedding=embed_model,
+    index_name=index_name
+)
 
-    # Load & Split Document
-    loader = TextLoader(file_path)
-    documents = loader.load()
-    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    split_docs = text_splitter.split_documents(documents)
+# Add texts to the Pinecone index
+pinecone_index = vectorstore._index
+pinecone_index.add_texts([doc['text'] for doc in split_docs])  # Assuming your docs have a 'text' key
 
-    # OpenAI Embeddings (text-embedding-3-large = 3072 dimensions)
-    embed_model = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        openai_api_key=openai_api_key
-    )
-
-    # Pinecone initialization
-    pc = Pinecone(api_key=pinecone_api_key)
-
-    # Create index if not exists
-    if index_name not in pc.list_indexes().names():
-        st.info(f"Creating index: {index_name}...")
-        pc.create_index(
-            name=index_name,
-            dimension=3072,
-            metric="cosine"
-        )
-        st.success(f"Index `{index_name}` created.")
-
-    # Embed and store documents in Pinecone
-    st.info("Embedding and uploading chunks to Pinecone...")
-    # Assuming you have a vectorstore helper method that stores documents in Pinecone
-    from langchain.vectorstores import Pinecone as LangchainPinecone
-
-    vectorstore = LangchainPinecone.from_documents(
-        documents=split_docs,
-        embedding=embed_model,
-        index_name=index_name
-    )
-    st.success("✅ Documents embedded and uploaded to Pinecone!")
-
-    # Optional: show sample metadata
-    st.write("📚 Example chunk:", split_docs[0].page_content[:300])
-
-else:
-    st.warning("Please upload a file and enter all required keys.")
+print("Documents have been indexed successfully!")
