@@ -1,64 +1,70 @@
 import os
 import streamlit as st
-import pinecone
+from langchain_community.document_loaders import PyPDFLoader
+from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import Pinecone as LangchainPinecone
-from langchain.chains.question_answering import load_qa_chain
 from langchain.chat_models import ChatOpenAI
-from dotenv import load_dotenv
+from langchain.chains.question_answering import load_qa_chain
+from pinecone import Pinecone
 
-# Load environment variables from .env (if present)
-load_dotenv()
+# --- UI Setup ---
+st.title("📚 Chat with your PDF (Pinecone + OpenAI)")
 
-# Initialize Pinecone
-pinecone.init(api_key=os.getenv("PINECONE_API_KEY"), environment="us-east-1")
+# --- API Keys ---
+openai_api_key = st.text_input("🔐 Enter your OpenAI API Key", type="password")
+pinecone_api_key = st.text_input("🌲 Enter your Pinecone API Key", type="password")
 
-# Set the new index name (3072-dimensional)
+if not openai_api_key or not pinecone_api_key:
+    st.warning("Please enter both API keys to continue.")
+    st.stop()
+
+# --- Pinecone Setup ---
+pc = Pinecone(api_key=pinecone_api_key)
 index_name = "openaitext-embedding-3-large"
 
-# Initialize the Pinecone Index
-index = pinecone.Index(index_name)
+try:
+    index = pc.Index(index_name)
+except Exception as e:
+    st.error(f"❌ Could not connect to Pinecone index: {e}")
+    st.stop()
 
-# Initialize the OpenAI embeddings model (ensure it matches your index dimensions, e.g., text-embedding-ada-003)
-embeddings = OpenAIEmbeddings(openai_api_key=os.getenv("OPENAI_API_KEY"))
-
-# Set up the Langchain Pinecone vector store
-vectorstore = LangchainPinecone(index, embeddings.embed_query, "text")
-
-# Streamlit UI to upload the PDF document
-st.title("Document Q&A Chatbot")
-
-uploaded_file = st.file_uploader("📄 Upload a PDF file", type=["pdf"])
-
+# --- Upload PDF ---
+uploaded_file = st.file_uploader("📄 Upload a PDF file", type="pdf")
 if uploaded_file:
-    # Save uploaded file
-    file_path = os.path.join("data", uploaded_file.name)
-    with open(file_path, "wb") as f:
+    with open("temp.pdf", "wb") as f:
         f.write(uploaded_file.read())
-    st.success(f"✅ {uploaded_file.name} uploaded successfully.")
 
-    # Load and split the document using PyPDFLoader
-    from langchain.document_loaders import PyPDFLoader
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    # --- Load + Split PDF ---
+    loader = PyPDFLoader("temp.pdf")
+    pages = loader.load()
 
-    loader = PyPDFLoader(file_path)
-    docs = loader.load()
-
-    # Split the document into chunks
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = splitter.split_documents(docs)
+    docs = splitter.split_documents(pages)
 
-    # Add the chunks to Pinecone (index) via the vector store
-    vectorstore.add_documents(chunks)
+    # --- Create Embeddings ---
+    embed_model = OpenAIEmbeddings(
+        model="text-embedding-3-large",
+        openai_api_key=openai_api_key
+    )
 
-    # User input for a query
-    query = st.text_input("💬 Ask a question about the document")
+    # --- Store Vectors in Pinecone ---
+    vectorstore = LangchainPinecone.from_documents(
+        docs,
+        embed_model,
+        index_name=index_name
+    )
 
+    st.success("✅ PDF processed and embedded into Pinecone!")
+
+    # --- Ask Questions ---
+    query = st.text_input("💬 Ask a question about the PDF")
     if query:
-        with st.spinner("🧠 Thinking..."):
-            matched_docs = vectorstore.similarity_search(query)
-            llm = ChatOpenAI(temperature=0, openai_api_key=os.getenv("OPENAI_API_KEY"))
+        with st.spinner("🔍 Searching..."):
+            docs_found = vectorstore.similarity_search(query)
+            llm = ChatOpenAI(temperature=0, openai_api_key=openai_api_key)
             chain = load_qa_chain(llm, chain_type="stuff")
-            answer = chain.run(input_documents=matched_docs, question=query)
-            st.success("💡 Answer:")
-            st.write(answer)
+            answer = chain.run(input_documents=docs_found, question=query)
+
+        st.subheader("💡 Answer")
+        st.write(answer)
