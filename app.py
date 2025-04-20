@@ -1,11 +1,12 @@
 import os
 import chardet
 import streamlit as st
-from langchain_core.documents import Document
 from langchain.text_splitter import CharacterTextSplitter
-from langchain_community.vectorstores import Pinecone
+from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores import Pinecone as LangChainPinecone
 from langchain_openai import OpenAIEmbeddings
-from pinecone import Pinecone, ServerlessSpec
+from pinecone import Pinecone
+from pinecone.core.serverless import ServerlessSpec
 
 # UI Setup
 st.title("🔍 Chat with Your Docs using Pinecone + LangChain")
@@ -56,13 +57,19 @@ if openai_api_key and pinecone_api_key and uploaded_file:
     text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     split_docs = text_splitter.split_documents(documents)
 
+    # Ensure no chunk exceeds 1000 characters
+    for i, doc in enumerate(split_docs):
+        if len(doc.page_content) > 1000:
+            st.warning(f"Chunk {i} exceeds 1000 characters, reducing...")
+            doc.page_content = doc.page_content[:1000]
+    
     # OpenAI Embeddings
     embed_model = OpenAIEmbeddings(
         model="text-embedding-3-large",
         openai_api_key=openai_api_key
     )
 
-    # Pinecone Initialization
+    # Pinecone Initialization (Correctly initializing with LangChain's Pinecone wrapper)
     pc = Pinecone(api_key=pinecone_api_key)
 
     # Create index if not exists
@@ -78,7 +85,7 @@ if openai_api_key and pinecone_api_key and uploaded_file:
 
     # Upload to Pinecone
     st.info("Embedding and uploading chunks to Pinecone...")
-    vectorstore = Pinecone.from_documents(
+    vectorstore = LangChainPinecone.from_documents(
         documents=split_docs,
         embedding=embed_model,
         index_name=index_name
