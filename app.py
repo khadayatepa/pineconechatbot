@@ -1,68 +1,66 @@
 import os
 import streamlit as st
-from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import Pinecone as LangchainPinecone
-from langchain.chat_models import ChatOpenAI
-from langchain.chains.question_answering import load_qa_chain
-from pinecone import Pinecone
+from langchain.text_splitter import CharacterTextSplitter
+from langchain_community.document_loaders import TextLoader
+from langchain_community.vectorstores import Pinecone
+from langchain_openai import OpenAIEmbeddings
+from pinecone import Pinecone, ServerlessSpec
 
-# --- UI Setup ---
-st.title("📚 Chat with your PDF using OpenAI + Pinecone")
+# UI Setup
+st.title("🔍 Chat with Your Docs using Pinecone + LangChain")
 
-# --- API Key Inputs ---
-openai_api_key = st.text_input("🔐 OpenAI API Key", type="password")
+# Input fields
+openai_api_key = st.text_input("🔑 OpenAI API Key", type="password")
 pinecone_api_key = st.text_input("🌲 Pinecone API Key", type="password")
+index_name = st.text_input("📦 Pinecone Index Name (e.g. openaitext-embedding-3-large)", value="openaitext-embedding-3-large")
+uploaded_file = st.file_uploader("📁 Upload a text file")
 
-# --- Index Configuration ---
-index_name = "openaitext-embedding-3-large"  # Your Pinecone index name
-pinecone_region = "us-east-1"  # Match your Pinecone dashboard region
+if openai_api_key and pinecone_api_key and uploaded_file:
+    st.success("✅ All credentials and file uploaded. Processing...")
 
-# --- Start if Keys are Present ---
-if openai_api_key and pinecone_api_key:
+    # Ensure LangChain sees the Pinecone API key
+    os.environ["PINECONE_API_KEY"] = pinecone_api_key
 
-    # --- Setup Pinecone Client ---
+    # Save file temporarily
+    with open("uploaded.txt", "wb") as f:
+        f.write(uploaded_file.getvalue())
+
+    # Load & Split Document
+    loader = TextLoader("uploaded.txt")
+    documents = loader.load()
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    split_docs = text_splitter.split_documents(documents)
+
+    # OpenAI Embeddings (text-embedding-3-large = 3072 dimensions)
+    embed_model = OpenAIEmbeddings(
+        model="text-embedding-3-large",
+        openai_api_key=openai_api_key
+    )
+
+    # Pinecone initialization
     pc = Pinecone(api_key=pinecone_api_key)
-    index = pc.Index(index_name)
 
-    # --- Upload and Process PDF ---
-    uploaded_file = st.file_uploader("📄 Upload a PDF", type="pdf")
-    if uploaded_file:
-        with open("temp.pdf", "wb") as f:
-            f.write(uploaded_file.read())
-
-        loader = PyPDFLoader("temp.pdf")
-        documents = loader.load()
-
-        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-        split_docs = splitter.split_documents(documents)
-
-        embeddings = OpenAIEmbeddings(
-            model="text-embedding-3-large",
-            openai_api_key=openai_api_key
+    # Create index if not exists
+    if index_name not in pc.list_indexes().names():
+        st.info(f"Creating index: {index_name}...")
+        pc.create_index(
+            name=index_name,
+            dimension=3072,
+            metric="cosine",
+            spec=ServerlessSpec(cloud="aws", region="us-east-1")
         )
+        st.success(f"Index `{index_name}` created.")
 
-        # --- Vectorstore with Pinecone ---
-        vectorstore = LangchainPinecone.from_documents(
-            documents=split_docs,
-            embedding=embeddings,
-            index_name=index_name
-        )
+    # Embed and store documents in Pinecone
+    st.info("Embedding and uploading chunks to Pinecone...")
+    vectorstore = Pinecone.from_documents(
+        documents=split_docs,
+        embedding=embed_model,
+        index_name=index_name
+    )
+    st.success("✅ Documents embedded and uploaded to Pinecone!")
 
-        st.success("✅ PDF uploaded and indexed!")
-
-        # --- Ask Question ---
-        query = st.text_input("💬 Ask a question about your PDF")
-        if query:
-            with st.spinner("💡 Generating answer..."):
-                results = vectorstore.similarity_search(query)
-                llm = ChatOpenAI(temperature=0, openai_api_key=openai_api_key)
-                chain = load_qa_chain(llm, chain_type="stuff")
-                answer = chain.run(input_documents=results, question=query)
-
-            st.subheader("🔍 Answer")
-            st.write(answer)
-
+    # Optional: show sample metadata
+    st.write("📚 Example chunk:", split_docs[0].page_content[:300])
 else:
-    st.info("Please enter both API keys above to get started.")
+    st.warning("Please upload a file and enter all required keys.")
