@@ -20,12 +20,22 @@ if openai_api_key and pinecone_api_key and uploaded_file:
     # Ensure LangChain sees the Pinecone API key
     os.environ["PINECONE_API_KEY"] = pinecone_api_key
 
-    # Save file temporarily
-    with open("uploaded.txt", "wb") as f:
+    # Save uploaded file temporarily
+    file_path = "uploaded.txt"
+    with open(file_path, "wb") as f:
         f.write(uploaded_file.getvalue())
 
+    # Read file with error handling for encoding
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            text = f.read()
+    except UnicodeDecodeError:
+        st.warning("UTF-8 decoding failed, trying ISO-8859-1...")
+        with open(file_path, "r", encoding="ISO-8859-1") as f:
+            text = f.read()
+
     # Load & Split Document
-    loader = TextLoader("uploaded.txt")
+    loader = TextLoader(file_path)
     documents = loader.load()
     text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
     split_docs = text_splitter.split_documents(documents)
