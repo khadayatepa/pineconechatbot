@@ -1,6 +1,9 @@
 streamlit
 langchain
+langchain-community
 openai
-tiktoken
-PyPDF2
 pinecone
+faiss-cpu
+tiktoken
+pypdf
+python-dotenv
