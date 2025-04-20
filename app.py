@@ -32,11 +32,21 @@ if openai_api_key and pinecone_api_key and uploaded_file:
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getvalue())
 
-    # Detect encoding and load content
+    # Detect encoding and load content with error handling
     try:
         encoding = detect_encoding(file_path)
-        with open(file_path, "r", encoding=encoding) as f:
-            text = f.read()
+        st.info(f"Detected encoding: {encoding}")
+        
+        # Try opening with detected encoding first
+        try:
+            with open(file_path, "r", encoding=encoding, errors='replace') as f:
+                text = f.read()
+        except UnicodeDecodeError:
+            # If the detected encoding fails, attempt with 'ISO-8859-1' or 'latin1'
+            st.warning(f"❌ Failed to decode using {encoding}. Trying 'ISO-8859-1' encoding.")
+            with open(file_path, "r", encoding='ISO-8859-1', errors='replace') as f:
+                text = f.read()
+        
         documents = [Document(page_content=text)]
     except Exception as e:
         st.error(f"❌ Failed to load file: {e}")
