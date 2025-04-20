@@ -9,62 +9,60 @@ from langchain.chains.question_answering import load_qa_chain
 from pinecone import Pinecone
 
 # --- UI Setup ---
-st.title("📚 Chat with your PDF (Pinecone + OpenAI)")
+st.title("📚 Chat with your PDF using OpenAI + Pinecone")
 
-# --- API Keys ---
-openai_api_key = st.text_input("🔐 Enter your OpenAI API Key", type="password")
-pinecone_api_key = st.text_input("🌲 Enter your Pinecone API Key", type="password")
+# --- API Key Inputs ---
+openai_api_key = st.text_input("🔐 OpenAI API Key", type="password")
+pinecone_api_key = st.text_input("🌲 Pinecone API Key", type="password")
 
-if not openai_api_key or not pinecone_api_key:
-    st.warning("Please enter both API keys to continue.")
-    st.stop()
+# --- Index Configuration ---
+index_name = "openaitext-embedding-3-large"  # Your Pinecone index name
+pinecone_region = "us-east-1"  # Match your Pinecone dashboard region
 
-# --- Pinecone Setup ---
-pc = Pinecone(api_key=pinecone_api_key)
-index_name = "openaitext-embedding-3-large"
+# --- Start if Keys are Present ---
+if openai_api_key and pinecone_api_key:
 
-try:
+    # --- Setup Pinecone Client ---
+    pc = Pinecone(api_key=pinecone_api_key)
     index = pc.Index(index_name)
-except Exception as e:
-    st.error(f"❌ Could not connect to Pinecone index: {e}")
-    st.stop()
 
-# --- Upload PDF ---
-uploaded_file = st.file_uploader("📄 Upload a PDF file", type="pdf")
-if uploaded_file:
-    with open("temp.pdf", "wb") as f:
-        f.write(uploaded_file.read())
+    # --- Upload and Process PDF ---
+    uploaded_file = st.file_uploader("📄 Upload a PDF", type="pdf")
+    if uploaded_file:
+        with open("temp.pdf", "wb") as f:
+            f.write(uploaded_file.read())
 
-    # --- Load + Split PDF ---
-    loader = PyPDFLoader("temp.pdf")
-    pages = loader.load()
+        loader = PyPDFLoader("temp.pdf")
+        documents = loader.load()
 
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    docs = splitter.split_documents(pages)
+        splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+        split_docs = splitter.split_documents(documents)
 
-    # --- Create Embeddings ---
-    embed_model = OpenAIEmbeddings(
-        model="text-embedding-3-large",
-        openai_api_key=openai_api_key
-    )
+        embeddings = OpenAIEmbeddings(
+            model="text-embedding-3-large",
+            openai_api_key=openai_api_key
+        )
 
-    # --- Store Vectors in Pinecone ---
-    vectorstore = LangchainPinecone.from_documents(
-        docs,
-        embed_model,
-        index_name=index_name
-    )
+        # --- Vectorstore with Pinecone ---
+        vectorstore = LangchainPinecone.from_documents(
+            documents=split_docs,
+            embedding=embeddings,
+            index_name=index_name
+        )
 
-    st.success("✅ PDF processed and embedded into Pinecone!")
+        st.success("✅ PDF uploaded and indexed!")
 
-    # --- Ask Questions ---
-    query = st.text_input("💬 Ask a question about the PDF")
-    if query:
-        with st.spinner("🔍 Searching..."):
-            docs_found = vectorstore.similarity_search(query)
-            llm = ChatOpenAI(temperature=0, openai_api_key=openai_api_key)
-            chain = load_qa_chain(llm, chain_type="stuff")
-            answer = chain.run(input_documents=docs_found, question=query)
+        # --- Ask Question ---
+        query = st.text_input("💬 Ask a question about your PDF")
+        if query:
+            with st.spinner("💡 Generating answer..."):
+                results = vectorstore.similarity_search(query)
+                llm = ChatOpenAI(temperature=0, openai_api_key=openai_api_key)
+                chain = load_qa_chain(llm, chain_type="stuff")
+                answer = chain.run(input_documents=results, question=query)
 
-        st.subheader("💡 Answer")
-        st.write(answer)
+            st.subheader("🔍 Answer")
+            st.write(answer)
+
+else:
+    st.info("Please enter both API keys above to get started.")
